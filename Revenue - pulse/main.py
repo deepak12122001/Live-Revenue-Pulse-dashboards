@@ -217,7 +217,7 @@ with col1:
 with col2:
     st.markdown(f"<div class='status-bar'>📊 Total sales (24h): {order_volume}</div>", unsafe_allow_html=True)
 with col3:
-    current_time = datetime.now().strftime('%H:%M:%S')
+    current_time = datetime.now().strftime('%d:%b:%Y')
     st.markdown(f"<div class='status-bar'>⏱️ Last update: {current_time}</div>", unsafe_allow_html=True)
 
 # ─── AUTO REFRESH ──────────────────────────────────────────────
