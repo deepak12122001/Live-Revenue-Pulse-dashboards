@@ -1,11 +1,9 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
-import json
-import os
-from database import get_recent_sales, get_sales_summary, add_sale
+import random
 
 # Page configuration
 st.set_page_config(
@@ -18,36 +16,24 @@ st.set_page_config(
 # Custom CSS for War Room look
 st.markdown("""
 <style>
-    /* Main background */
     .stApp {
         background: linear-gradient(135deg, #0a0c10 0%, #14161c 100%);
     }
-    
-    /* Headers */
     h1, h2, h3 {
         font-family: 'Courier New', monospace;
     }
-    
-    /* KPI Cards */
     [data-testid="stMetricValue"] {
         color: #00ffcc !important;
         font-size: 2.2rem !important;
         font-weight: bold !important;
         font-family: 'Courier New', monospace !important;
     }
-    
     [data-testid="stMetricLabel"] {
         color: #888 !important;
         font-size: 0.8rem !important;
         text-transform: uppercase !important;
         letter-spacing: 2px !important;
     }
-    
-    [data-testid="stMetricDelta"] {
-        color: #00ffcc !important;
-    }
-    
-    /* Alert box */
     .weather-alert {
         background: rgba(255, 51, 102, 0.15);
         border-left: 4px solid #ff3366;
@@ -56,21 +42,7 @@ st.markdown("""
         margin: 1rem 0;
         color: #ff3366;
         font-weight: bold;
-        animation: slideIn 0.5s ease;
     }
-    
-    @keyframes slideIn {
-        from {
-            opacity: 0;
-            transform: translateX(-20px);
-        }
-        to {
-            opacity: 1;
-            transform: translateX(0);
-        }
-    }
-    
-    /* Live badge */
     .live-badge {
         background: #ff3366;
         color: white;
@@ -82,13 +54,10 @@ st.markdown("""
         animation: blink 1.5s infinite;
         text-align: center;
     }
-    
     @keyframes blink {
         0%, 100% { opacity: 1; }
         50% { opacity: 0.5; }
     }
-    
-    /* Status bar */
     .status-bar {
         background: rgba(0, 0, 0, 0.5);
         padding: 0.8rem;
@@ -98,217 +67,159 @@ st.markdown("""
         color: #888;
         text-align: center;
     }
-    
-    /* Dataframe styling */
-    .dataframe {
-        font-family: 'Courier New', monospace !important;
-    }
-    
-    /* Hide default Streamlit elements */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
-# Process queued sales
-SALES_QUEUE_FILE = "sales_queue.json"
+# ─── DATA CONFIG ───────────────────────────────────────────────
+PRODUCTS = [
+    "Premium Coffee", "Energy Drink", "Protein Bar", "Green Tea",
+    "Sports Water", "Vitamin Pack", "Cold Brew", "Smoothie"
+]
+CITIES = ["New York", "Chicago", "Los Angeles", "Houston",
+          "Seattle", "Miami", "Denver", "Austin"]
+PRICES = {
+    "Premium Coffee": 8.50, "Energy Drink": 4.99, "Protein Bar": 6.75,
+    "Green Tea": 5.25, "Sports Water": 3.50, "Vitamin Pack": 12.99,
+    "Cold Brew": 7.25, "Smoothie": 9.50
+}
 
-def process_sales_queue():
-    """Read and add queued sales to database"""
-    if os.path.exists(SALES_QUEUE_FILE):
-        try:
-            with open(SALES_QUEUE_FILE, 'r') as f:
-                sales = json.load(f)
-            
-            if sales:
-                for sale in sales:
-                    add_sale(sale['product'], sale['price'], sale['city'])
-                
-                # Clear queue after processing
-                with open(SALES_QUEUE_FILE, 'w') as f:
-                    json.dump([], f)
-                
-                return len(sales)
-        except Exception as e:
-            pass
-    return 0
+# ─── SESSION STATE: Persistent fake sales data ──────────────────
+if "sales_data" not in st.session_state:
+    # Generate 50 past sales on first load
+    past_sales = []
+    now = datetime.now()
+    for i in range(50):
+        product = random.choice(PRODUCTS)
+        past_sales.append({
+            "timestamp": now - timedelta(minutes=random.randint(1, 1440)),
+            "product": product,
+            "price": PRICES[product] * random.randint(1, 5),
+            "city": random.choice(CITIES)
+        })
+    st.session_state.sales_data = past_sales
+    st.session_state.last_update = now
 
-# Process pending sales
-new_sales = process_sales_queue()
+# Add 1-3 new sales every refresh
+new_count = random.randint(1, 3)
+for _ in range(new_count):
+    product = random.choice(PRODUCTS)
+    st.session_state.sales_data.append({
+        "timestamp": datetime.now(),
+        "product": product,
+        "price": PRICES[product] * random.randint(1, 5),
+        "city": random.choice(CITIES)
+    })
 
-# Header Section
+# Keep only last 24h of data
+cutoff = datetime.now() - timedelta(hours=24)
+st.session_state.sales_data = [
+    s for s in st.session_state.sales_data if s["timestamp"] > cutoff
+]
+
+df_all = pd.DataFrame(st.session_state.sales_data)
+
+# ─── HEADER ────────────────────────────────────────────────────
 col1, col2, col3 = st.columns([2, 1, 1])
 with col1:
     st.markdown("<h1 style='color: #00ffcc; margin-bottom: 0;'>🔴 LIVE REVENUE PULSE</h1>", unsafe_allow_html=True)
     st.markdown("<p style='color: #888; margin-top: 0;'>War Room Command Center | Real-time Sales Monitoring</p>", unsafe_allow_html=True)
-
 with col3:
     st.markdown("<div class='live-badge' style='float: right;'>● LIVE STREAMING</div>", unsafe_allow_html=True)
-    if new_sales > 0:
-        st.markdown(f"<p style='text-align: right; color: #00ffcc; font-size: 0.8rem;'>+{new_sales} new sales</p>", unsafe_allow_html=True)
+    st.markdown(f"<p style='text-align: right; color: #00ffcc; font-size: 0.8rem;'>+{new_count} new sales</p>", unsafe_allow_html=True)
 
 st.markdown("---")
 
-# Generate random weather alert (simulating real-time weather)
-import random
+# ─── WEATHER ALERT ─────────────────────────────────────────────
 weather_scenarios = [
-    ("🌧️", "Heavy rain detected in Seattle", "Online sales increased by 20%", "positive"),
-    ("🔥", "Heatwave warning in Austin", "Sales decreased by 20%", "negative"),
-    ("❄️", "Cold front in Chicago", "Hot beverage sales up 15%", "positive"),
-    ("🌪️", "Storm approaching Miami", "Emergency supply sales +30%", "positive"),
-    ("☀️", "Heat advisory in Phoenix", "Indoor activity sales +10%", "positive"),
-    ("🌨️", "Snow storm in Denver", "Delivery sales +25%", "positive")
+    ("🌧️", "Heavy rain in Seattle", "Online sales up 20%"),
+    ("🔥", "Heatwave in Austin", "Cold drink sales up 35%"),
+    ("❄️", "Cold front in Chicago", "Hot beverage sales up 15%"),
+    ("🌪️", "Storm in Miami", "Emergency supply sales +30%"),
+    ("☀️", "Heat advisory in Phoenix", "Indoor activity sales +10%"),
+    ("🌨️", "Snow storm in Denver", "Delivery sales +25%")
 ]
-
-weather_icon, weather_title, weather_effect, weather_type = random.choice(weather_scenarios)
+icon, title, effect = random.choice(weather_scenarios)
 st.markdown(f"""
 <div class='weather-alert'>
-    ⚠️ WEATHER IMPACT: {weather_icon} {weather_title} - {weather_effect}
+    ⚠️ WEATHER IMPACT: {icon} {title} - {effect}
 </div>
 """, unsafe_allow_html=True)
 
-# Get data
-summary = get_sales_summary()
+# ─── KPI METRICS ───────────────────────────────────────────────
+total_revenue = df_all["price"].sum()
+order_volume = len(df_all)
+avg_order = df_all["price"].mean() if order_volume > 0 else 0
+active_cities = df_all["city"].nunique()
 
-# KPI Row
 col1, col2, col3, col4 = st.columns(4)
-
 with col1:
-    st.metric(
-        label="💰 TOTAL REVENUE (24h)",
-        value=f"${summary['total_revenue']:,.0f}",
-        delta="+5%" if summary['total_revenue'] > 0 else None
-    )
-
+    st.metric("💰 TOTAL REVENUE (24h)", f"${total_revenue:,.0f}", "+5%")
 with col2:
-    st.metric(
-        label="📦 ORDER VOLUME",
-        value=f"{summary['order_volume']:,}",
-        delta=None
-    )
-
+    st.metric("📦 ORDER VOLUME", f"{order_volume:,}")
 with col3:
-    st.metric(
-        label="💵 AVG ORDER VALUE",
-        value=f"${summary['avg_order_value']:,.2f}",
-        delta=None
-    )
-
+    st.metric("💵 AVG ORDER VALUE", f"${avg_order:,.2f}")
 with col4:
-    st.metric(
-        label="🌍 ACTIVE CITIES",
-        value=len(summary['sales_by_city']),
-        delta=None
-    )
+    st.metric("🌍 ACTIVE CITIES", active_cities)
 
 st.markdown("---")
 
-# Charts Row
+# ─── CHARTS ────────────────────────────────────────────────────
 col1, col2 = st.columns(2)
 
 with col1:
     st.markdown("<h3 style='color: #00ffcc;'>📊 SALES BY CITY</h3>", unsafe_allow_html=True)
-    if summary['sales_by_city']:
-        city_df = pd.DataFrame({
-            'City': list(summary['sales_by_city'].keys()),
-            'Orders': list(summary['sales_by_city'].values())
-        }).sort_values('Orders', ascending=False)
-        
-        fig = px.bar(
-            city_df, 
-            x='City', 
-            y='Orders', 
-            color='Orders',
-            color_continuous_scale='Viridis',
-            text='Orders'
-        )
-        fig.update_traces(textposition='outside')
-        fig.update_layout(
-            paper_bgcolor='rgba(30,31,46,0)',
-            plot_bgcolor='rgba(30,31,46,0.3)',
-            font_color='#e0e0e0',
-            title_font_color='#00ffcc',
-            showlegend=False,
-            height=400
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("💤 No sales yet. Run generator.py in another terminal")
+    city_df = df_all.groupby("city").size().reset_index(name="Orders").sort_values("Orders", ascending=False)
+    fig = px.bar(city_df, x="city", y="Orders", color="Orders",
+                 color_continuous_scale="Viridis", text="Orders")
+    fig.update_traces(textposition="outside")
+    fig.update_layout(
+        paper_bgcolor="rgba(30,31,46,0)", plot_bgcolor="rgba(30,31,46,0.3)",
+        font_color="#e0e0e0", showlegend=False, height=400
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 with col2:
     st.markdown("<h3 style='color: #00ffcc;'>📈 TOP PRODUCTS</h3>", unsafe_allow_html=True)
-    if summary['sales_by_product']:
-        product_df = pd.DataFrame({
-            'Product': list(summary['sales_by_product'].keys()),
-            'Units Sold': list(summary['sales_by_product'].values())
-        }).sort_values('Units Sold', ascending=True)
-        
-        fig = px.bar(
-            product_df, 
-            x='Units Sold', 
-            y='Product', 
-            orientation='h',
-            color='Units Sold',
-            color_continuous_scale='Plasma',
-            text='Units Sold'
-        )
-        fig.update_traces(textposition='outside')
-        fig.update_layout(
-            paper_bgcolor='rgba(30,31,46,0)',
-            plot_bgcolor='rgba(30,31,46,0.3)',
-            font_color='#e0e0e0',
-            title_font_color='#00ffcc',
-            showlegend=False,
-            height=400
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("💤 No sales yet. Run generator.py in another terminal")
+    product_df = df_all.groupby("product").size().reset_index(name="Units Sold").sort_values("Units Sold", ascending=True)
+    fig = px.bar(product_df, x="Units Sold", y="product", orientation="h",
+                 color="Units Sold", color_continuous_scale="Plasma", text="Units Sold")
+    fig.update_traces(textposition="outside")
+    fig.update_layout(
+        paper_bgcolor="rgba(30,31,46,0)", plot_bgcolor="rgba(30,31,46,0.3)",
+        font_color="#e0e0e0", showlegend=False, height=400
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 st.markdown("---")
 
-# Recent Sales Table
+# ─── RECENT TRANSACTIONS ───────────────────────────────────────
 st.markdown("<h3 style='color: #00ffcc;'>📋 RECENT TRANSACTIONS</h3>", unsafe_allow_html=True)
 
-sales_data = get_recent_sales(24)
-if sales_data:
-    # Create DataFrame
-    df = pd.DataFrame([{
-        '🕐 Time': sale.timestamp.strftime('%H:%M:%S'),
-        '📦 Product': sale.product,
-        '💰 Price': f"${sale.price:,.0f}",
-        '📍 City': sale.city
-    } for sale in sales_data[:20]])
-    
-    st.dataframe(
-        df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            '🕐 Time': st.column_config.TextColumn('🕐 Time', width='small'),
-            '📦 Product': st.column_config.TextColumn('📦 Product', width='medium'),
-            '💰 Price': st.column_config.TextColumn('💰 Price', width='small'),
-            '📍 City': st.column_config.TextColumn('📍 City', width='medium')
-        }
-    )
-else:
-    st.info("💤 Waiting for sales data... Run 'python generator.py' in another terminal")
+recent = df_all.sort_values("timestamp", ascending=False).head(20).copy()
+recent["🕐 Time"] = recent["timestamp"].dt.strftime("%H:%M:%S")
+recent["📦 Product"] = recent["product"]
+recent["💰 Price"] = recent["price"].apply(lambda x: f"${x:,.2f}")
+recent["📍 City"] = recent["city"]
 
-# Status Bar
+st.dataframe(
+    recent[["🕐 Time", "📦 Product", "💰 Price", "📍 City"]],
+    use_container_width=True,
+    hide_index=True
+)
+
+# ─── STATUS BAR ────────────────────────────────────────────────
 st.markdown("---")
 col1, col2, col3 = st.columns(3)
-
 with col1:
     st.markdown("<div class='status-bar'>🔄 Auto-refreshing every 3 seconds</div>", unsafe_allow_html=True)
-
 with col2:
-    total_sales = len(sales_data) if sales_data else 0
-    st.markdown(f"<div class='status-bar'>📊 Total sales (24h): {total_sales}</div>", unsafe_allow_html=True)
-
+    st.markdown(f"<div class='status-bar'>📊 Total sales (24h): {order_volume}</div>", unsafe_allow_html=True)
 with col3:
     current_time = datetime.now().strftime('%H:%M:%S')
     st.markdown(f"<div class='status-bar'>⏱️ Last update: {current_time}</div>", unsafe_allow_html=True)
 
-# Auto-refresh
+# ─── AUTO REFRESH ──────────────────────────────────────────────
 time.sleep(3)
 st.rerun()
